@@ -559,6 +559,28 @@ export const useLogsData = () => {
           value: other.request_path,
         });
       }
+      if (other?.thinking_enabled) {
+        expandDataLocal.push({
+          key: t('思考模式'),
+          value: other.thinking_params || t('已启用'),
+        });
+      }
+      if (other?.has_tools) {
+        let toolInfo = `${other.tools_count || 0} ${t('个工具')}`;
+        if (other?.tool_names) {
+          toolInfo += ` (${other.tool_names})`;
+        }
+        expandDataLocal.push({
+          key: t('工具调用'),
+          value: toolInfo,
+        });
+      }
+      if (other?.tool_call_messages > 0) {
+        expandDataLocal.push({
+          key: t('历史工具调用消息'),
+          value: other.tool_call_messages,
+        });
+      }
       if (other?.billing_source === 'subscription') {
         const planId = other?.subscription_plan_id;
         const planTitle = other?.subscription_plan_title || '';

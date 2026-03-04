@@ -74,6 +74,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendRequestPath(ctx, relayInfo, other)
 	appendRequestConversionChain(relayInfo, other)
 	appendBillingInfo(relayInfo, other)
+	appendRequestDebugInfo(relayInfo, other)
 	return other
 }
 
@@ -202,6 +203,76 @@ func GenerateClaudeOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 		info["cache_creation_ratio_1h"] = cacheCreationRatio1h
 	}
 	return info
+}
+
+func BuildRequestDebugInfo(relayInfo *relaycommon.RelayInfo) map[string]interface{} {
+	info := make(map[string]interface{})
+	if relayInfo == nil || relayInfo.Request == nil {
+		return info
+	}
+
+	req, ok := relayInfo.Request.(*dto.GeneralOpenAIRequest)
+	if !ok {
+		return info
+	}
+
+	thinkingParams := make([]string, 0, 5)
+	if req.ReasoningEffort != "" {
+		thinkingParams = append(thinkingParams, "reasoning_effort="+req.ReasoningEffort)
+	}
+	if len(req.Reasoning) > 0 {
+		thinkingParams = append(thinkingParams, "reasoning")
+	}
+	if len(req.THINKING) > 0 {
+		thinkingParams = append(thinkingParams, "thinking")
+	}
+	if len(req.EnableThinking) > 0 {
+		thinkingParams = append(thinkingParams, "enable_thinking")
+	}
+	if len(req.Think) > 0 {
+		thinkingParams = append(thinkingParams, "think")
+	}
+	if len(thinkingParams) > 0 {
+		info["thinking_enabled"] = true
+		info["thinking_params"] = strings.Join(thinkingParams, ", ")
+	}
+
+	if len(req.Tools) > 0 {
+		info["has_tools"] = true
+		info["tools_count"] = len(req.Tools)
+		toolNames := make([]string, 0, len(req.Tools))
+		for _, tool := range req.Tools {
+			if tool.Function.Name != "" {
+				toolNames = append(toolNames, tool.Function.Name)
+			}
+		}
+		if len(toolNames) > 0 {
+			info["tool_names"] = strings.Join(toolNames, ", ")
+		}
+	}
+
+	if len(req.Messages) > 0 {
+		toolCallMsgCount := 0
+		for _, msg := range req.Messages {
+			if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+				toolCallMsgCount++
+			}
+		}
+		if toolCallMsgCount > 0 {
+			info["tool_call_messages"] = toolCallMsgCount
+		}
+	}
+
+	return info
+}
+
+func appendRequestDebugInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+	if relayInfo == nil || other == nil {
+		return
+	}
+	for k, v := range BuildRequestDebugInfo(relayInfo) {
+		other[k] = v
+	}
 }
 
 func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData types.PriceData) map[string]interface{} {

@@ -65,4 +65,7 @@ const (
 
 	// ContextKeyLanguage stores the user's language preference for i18n
 	ContextKeyLanguage ContextKey = "language"
+
+	// ContextKeyRequestDebugInfo stores request-level debug info (thinking, tools, etc.) for logging
+	ContextKeyRequestDebugInfo ContextKey = "request_debug_info"
 )

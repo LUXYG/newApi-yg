@@ -122,6 +122,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
+	common.SetContextKey(c, constant.ContextKeyRequestDebugInfo, service.BuildRequestDebugInfo(relayInfo))
+
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needCountToken := constant.CountToken
 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
@@ -381,6 +383,11 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		}
 		service.AppendChannelAffinityAdminInfo(c, adminInfo)
 		other["admin_info"] = adminInfo
+		if debugInfo, exists := common.GetContextKeyType[map[string]interface{}](c, constant.ContextKeyRequestDebugInfo); exists {
+			for k, v := range debugInfo {
+				other[k] = v
+			}
+		}
 		startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
 		if startTime.IsZero() {
 			startTime = time.Now()
