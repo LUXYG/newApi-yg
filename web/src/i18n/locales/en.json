@@ -2628,6 +2628,8 @@
     "请求结束后多退少补": "Adjust after request completion",
     "请求超时，请刷新页面后重新发起 GitHub 登录": "Request timed out, please refresh and restart GitHub login",
     "请求路径": "Request path",
+    "请求参数": "Request params",
+    "消息数": "Messages",
     "个工具": "tools",
     "工具调用": "Tool calls",
     "历史工具调用消息": "Historical tool call messages",

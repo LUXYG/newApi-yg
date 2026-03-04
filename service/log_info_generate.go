@@ -216,6 +216,23 @@ func BuildRequestDebugInfo(relayInfo *relaycommon.RelayInfo) map[string]interfac
 		return info
 	}
 
+	info["messages_count"] = len(req.Messages)
+
+	if req.Temperature != nil {
+		info["temperature"] = *req.Temperature
+	}
+	if req.TopP != nil {
+		info["top_p"] = *req.TopP
+	}
+	if req.MaxCompletionTokens != nil {
+		info["max_completion_tokens"] = *req.MaxCompletionTokens
+	} else if req.MaxTokens != nil {
+		info["max_tokens"] = *req.MaxTokens
+	}
+	if req.ResponseFormat != nil {
+		info["response_format"] = req.ResponseFormat.Type
+	}
+
 	thinkingParams := make([]string, 0, 5)
 	if req.ReasoningEffort != "" {
 		thinkingParams = append(thinkingParams, "reasoning_effort="+req.ReasoningEffort)

@@ -559,6 +559,32 @@ export const useLogsData = () => {
           value: other.request_path,
         });
       }
+      {
+        const paramParts = [];
+        if (other?.messages_count != null) {
+          paramParts.push(`${t('消息数')}: ${other.messages_count}`);
+        }
+        if (other?.temperature != null) {
+          paramParts.push(`temperature: ${other.temperature}`);
+        }
+        if (other?.top_p != null) {
+          paramParts.push(`top_p: ${other.top_p}`);
+        }
+        if (other?.max_completion_tokens != null) {
+          paramParts.push(`max_completion_tokens: ${other.max_completion_tokens}`);
+        } else if (other?.max_tokens != null) {
+          paramParts.push(`max_tokens: ${other.max_tokens}`);
+        }
+        if (other?.response_format) {
+          paramParts.push(`response_format: ${other.response_format}`);
+        }
+        if (paramParts.length > 0) {
+          expandDataLocal.push({
+            key: t('请求参数'),
+            value: paramParts.join('  |  '),
+          });
+        }
+      }
       if (other?.thinking_enabled) {
         expandDataLocal.push({
           key: t('思考模式'),
