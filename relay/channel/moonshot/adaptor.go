@@ -84,24 +84,27 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	return request, nil
 }
 
-// sanitizeAssistantMessages aligns tool-call history with Moonshot/Kimi constraints.
 func sanitizeAssistantMessages(request *dto.GeneralOpenAIRequest) {
 	if request == nil || len(request.Messages) == 0 {
 		return
 	}
 
 	for i, msg := range request.Messages {
-		if msg.Role != "assistant" || len(msg.ToolCalls) == 0 {
+		if msg.Role != "assistant" {
 			continue
 		}
 
-		if msg.Content == nil || strings.TrimSpace(msg.StringContent()) == "" {
+		isEmpty := msg.Content == nil || strings.TrimSpace(msg.StringContent()) == ""
+
+		if isEmpty {
 			request.Messages[i].Content = "..."
 		}
 
-		if msg.ReasoningContent == nil || strings.TrimSpace(*msg.ReasoningContent) == "" {
-			placeholder := "..."
-			request.Messages[i].ReasoningContent = &placeholder
+		if len(msg.ToolCalls) > 0 {
+			if msg.ReasoningContent == nil || strings.TrimSpace(*msg.ReasoningContent) == "" {
+				placeholder := "..."
+				request.Messages[i].ReasoningContent = &placeholder
+			}
 		}
 	}
 }

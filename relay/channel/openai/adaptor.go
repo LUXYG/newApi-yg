@@ -372,10 +372,13 @@ func sanitizeAssistantMessages(request *dto.GeneralOpenAIRequest) {
 			continue
 		}
 
+		isEmpty := msg.Content == nil || strings.TrimSpace(msg.StringContent()) == ""
+
+		if isEmpty {
+			request.Messages[i].Content = "..."
+		}
+
 		if len(msg.ToolCalls) > 0 {
-			if msg.Content == nil || strings.TrimSpace(msg.StringContent()) == "" {
-				request.Messages[i].Content = "..."
-			}
 			if msg.ReasoningContent == nil || strings.TrimSpace(*msg.ReasoningContent) == "" {
 				placeholder := "..."
 				request.Messages[i].ReasoningContent = &placeholder
