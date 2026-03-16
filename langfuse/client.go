@@ -109,6 +109,11 @@ func Enqueue(events []IngestionEvent) {
 	if globalClient == nil || len(events) == 0 {
 		return
 	}
+	if common.DebugEnabled {
+		for _, e := range events {
+			common.SysLog(fmt.Sprintf("Langfuse [enqueue]: type=%s, id=%s", e.Type, e.ID))
+		}
+	}
 	select {
 	case globalClient.eventCh <- events:
 	default:
@@ -185,5 +190,7 @@ func (c *Client) send(events []IngestionEvent) {
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusMultiStatus {
 		common.SysError(fmt.Sprintf("Langfuse: unexpected status %d for %d events", resp.StatusCode, len(events)))
+	} else if common.DebugEnabled {
+		common.SysLog(fmt.Sprintf("Langfuse [send]: status=%d, events=%d, bodySize=%d bytes", resp.StatusCode, len(events), len(body)))
 	}
 }

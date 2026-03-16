@@ -2,6 +2,7 @@ package controller
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -69,6 +70,10 @@ func CreateSecurityKeyword(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if common.DebugEnabled {
+		common.SysLog(fmt.Sprintf("Security: created keyword id=%d, keyword=%s, action=%s, severity=%s, matchType=%s, checkScope=%s",
+			kw.Id, kw.Keyword, kw.Action, kw.Severity, kw.MatchType, kw.CheckScope))
+	}
 	common.ApiSuccess(c, kw)
 }
 
@@ -116,6 +121,10 @@ func UpdateSecurityKeyword(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if common.DebugEnabled {
+		common.SysLog(fmt.Sprintf("Security: updated keyword id=%d, keyword=%s, action=%s, severity=%s",
+			existing.Id, existing.Keyword, existing.Action, existing.Severity))
+	}
 	common.ApiSuccess(c, existing)
 }
 
@@ -130,6 +139,9 @@ func DeleteSecurityKeyword(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if common.DebugEnabled {
+		common.SysLog(fmt.Sprintf("Security: deleted keyword id=%d", id))
+	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 }
 
@@ -143,6 +155,9 @@ func ToggleSecurityKeyword(c *gin.Context) {
 	if err := model.ToggleSecurityKeyword(id); err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	if common.DebugEnabled {
+		common.SysLog(fmt.Sprintf("Security: toggled keyword id=%d", id))
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 }
@@ -200,6 +215,9 @@ func ClearSecurityAuditLogs(c *gin.Context) {
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	if common.DebugEnabled {
+		common.SysLog(fmt.Sprintf("Security: cleared audit logs older than %d days, deleted=%d", days, affected))
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

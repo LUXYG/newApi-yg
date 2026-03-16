@@ -2,6 +2,7 @@ package langfuse
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -268,6 +269,11 @@ func ReportGeneration(ctx *gin.Context, info *relaycommon.RelayInfo, usage *dto.
 		},
 	}
 
+	if common.DebugEnabled {
+		common.SysLog(fmt.Sprintf("Langfuse [sync]: requestId=%s, model=%s, user=%s, hasReasoning=%v, inputMsgCount=%d, responseLen=%d",
+			requestId, info.OriginModelName, username, info.ReasoningContent != "", reqParams.MessageCount, len(info.ResponseContent)))
+	}
+
 	Enqueue([]IngestionEvent{traceEvent, generationEvent})
 }
 
@@ -330,6 +336,12 @@ func ReportGenerationAsync(ctx *gin.Context, info *relaycommon.RelayInfo, usage 
 
 	// 在进入 goroutine 前提取 messages（[]byte 可安全跨 goroutine 传递）
 	snap.InputMessages = extractInputMessages(info.Request)
+
+	if common.DebugEnabled {
+		common.SysLog(fmt.Sprintf("Langfuse [async]: requestId=%s, model=%s, user=%s, hasReasoning=%v, msgCount=%d, responseLen=%d, inputBytes=%d",
+			snap.RequestId, snap.OriginModelName, snap.Username, snap.ReasoningContent != "",
+			snap.MessageCount, len(snap.ResponseContent), len(snap.InputMessages)))
+	}
 
 	var usageCopy *dto.Usage
 	if usage != nil {
@@ -495,6 +507,17 @@ func reportFromSnapshot(snap *reportSnapshot, usage *dto.Usage) {
 			CompletionStartTime: completionStartTime,
 			Metadata:            buildGenerationMetadata(snap, endTime),
 		},
+	}
+
+	if common.DebugEnabled {
+		var usageStr string
+		if usageData != nil {
+			usageStr = fmt.Sprintf("input=%d, output=%d, total=%d", usageData.Input, usageData.Output, usageData.Total)
+		}
+		common.SysLog(fmt.Sprintf("Langfuse [enqueue]: requestId=%s, model=%s, user=%s, usage={%s}, ttft=%dms, latency=%dms",
+			requestId, snap.OriginModelName, snap.Username, usageStr,
+			snap.FirstResponseTime.Sub(snap.StartTime).Milliseconds(),
+			endTime.Sub(snap.StartTime).Milliseconds()))
 	}
 
 	Enqueue([]IngestionEvent{traceEvent, generationEvent})
