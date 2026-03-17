@@ -78,19 +78,10 @@ func GetUserCache(userId int) (userCache *UserBase, err error) {
 	var user *User
 	var fromDB bool
 	defer func() {
-		// Update Redis cache asynchronously on successful DB read.
-		// IMPORTANT: re-read from DB in the goroutine instead of using the captured *user.
-		// The captured user has the state at fetch time (e.g. Status=1).
-		// If the user is banned between the fetch and the goroutine execution,
-		// using the captured value would overwrite the ban and restore Status=1 in Redis.
+		// Update Redis cache asynchronously on successful DB read
 		if shouldUpdateRedis(fromDB, err) && user != nil {
-			cachedId := user.Id
 			gopool.Go(func() {
-				freshUser, freshErr := GetUserById(cachedId, false)
-				if freshErr != nil || freshUser == nil {
-					return
-				}
-				if err := updateUserCache(*freshUser); err != nil {
+				if err := updateUserCache(*user); err != nil {
 					common.SysLog("failed to update user status cache: " + err.Error())
 				}
 			})
