@@ -88,14 +88,48 @@ type SecurityCheckResult struct {
 	UserMessage string // 触发时的完整用户消息，用于审计日志摘要
 }
 
-// ExtractLastUserText 从 messages 中提取最后一条 role=user 的消息文本内容。
-func ExtractLastUserText(messages []dto.Message) string {
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" {
-			return messages[i].StringContent()
+// ExtractTextByScope 根据 checkScope 从 messages 中提取待检测文本，
+// 同时返回最后一条 user 消息（用于审计日志摘要，不受 scope 影响）。
+//
+// check_scope 三档含义：
+//   - "user_only"     : 所有 role=user 消息（含历史轮次），防止用户手动粘贴敏感内容
+//   - "user_and_tool" : role=user + role=tool，防止工具读取的外部文档中含敏感信息
+//   - "all"           : 全部消息（含 system、assistant），最严格，性能开销最大
+func ExtractTextByScope(messages []dto.Message, checkScope string) (checkText, lastUserText string) {
+	var sb strings.Builder
+	for _, msg := range messages {
+		var shouldCheck bool
+		switch checkScope {
+		case "all":
+			shouldCheck = true
+		case "user_and_tool":
+			shouldCheck = msg.Role == "user" || msg.Role == "tool"
+		default: // "user_only"
+			shouldCheck = msg.Role == "user"
+		}
+		if shouldCheck {
+			if text := msg.StringContent(); text != "" {
+				if sb.Len() > 0 {
+					sb.WriteString("\n")
+				}
+				sb.WriteString(text)
+			}
+		}
+		// 始终跟踪最后一条 user 消息，用于审计日志摘要
+		if msg.Role == "user" {
+			if text := msg.StringContent(); text != "" {
+				lastUserText = text
+			}
 		}
 	}
-	return ""
+	return sb.String(), lastUserText
+}
+
+// ExtractLastUserText 从 messages 中提取最后一条 role=user 的消息文本内容。
+// 保留此函数以兼容其他可能的调用方。
+func ExtractLastUserText(messages []dto.Message) string {
+	_, last := ExtractTextByScope(messages, "user_only")
+	return last
 }
 
 // HandleSecurityHit 在检测命中后异步写入审计日志并更新触发计数。
@@ -157,22 +191,33 @@ func HandleSensitiveWordHit(userId int, username string, words []string, modelNa
 	}
 }
 
-// BanUserForSecurity 因安全关键词命中而禁用用户，同步清除 Redis 缓存确保立即生效。
+// BanUserForSecurity 因安全关键词命中而禁用用户。
+// 采用双保险策略：同时禁用用户账号和该用户所有 Token，并清除 Redis 用户缓存。
+// 即使 Token Redis 缓存在 TTL 内仍有效，DB 层 TokenStatusDisabled 也会在缓存过期后提供兜底。
 func BanUserForSecurity(userId int, username string) {
-	err := model.DB.Model(&model.User{}).Where("id = ?", userId).Update("status", common.UserStatusDisabled).Error
-	if err != nil {
+	// 1. 禁用用户账号
+	if err := model.DB.Model(&model.User{}).Where("id = ?", userId).Update("status", common.UserStatusDisabled).Error; err != nil {
 		common.SysError("Security: failed to ban user " + username + ": " + err.Error())
 		return
 	}
-	common.SysLog("Security: user banned due to dangerous keyword, userId=" + common.Interface2String(userId) + ", username=" + username)
 
-	// 清除 Redis 用户缓存（key 格式与 model/user_cache.go 保持一致），确保后续请求立即被拒绝
-	cacheKey := fmt.Sprintf("user:%d", userId)
-	_ = common.RedisDel(cacheKey)
+	// 2. 批量禁用该用户所有启用中的 Token（双保险）
+	// ValidateUserToken 会检查 Token.Status，TokenStatusDisabled 会立即被拒绝
+	if err := model.DB.Model(&model.Token{}).
+		Where("user_id = ? AND status = ?", userId, common.TokenStatusEnabled).
+		Update("status", common.TokenStatusDisabled).Error; err != nil {
+		common.SysError("Security: failed to disable tokens for user " + username + ": " + err.Error())
+	}
+
+	common.SysLog(fmt.Sprintf("Security: user banned, userId=%d, username=%s", userId, username))
+
+	// 3. 清除 Redis 用户缓存（key 格式与 model/user_cache.go 保持一致）
+	_ = common.RedisDel(fmt.Sprintf("user:%d", userId))
 }
 
 // CheckSecurityText 供 relay 层调用的检测入口。
-// 根据关键词的 check_scope 配置，对全量文本或仅最后一条 user 消息执行检测。
+// 根据每条关键词的 check_scope 分别提取对应范围的文本进行匹配。
+// 支持三档扫描范围：user_only / user_and_tool / all。
 // 正则表达式使用全局缓存，只在首次使用时编译，之后复用已编译对象。
 func CheckSecurityText(fullText string, messages []dto.Message) *SecurityCheckResult {
 	keywords := loadSecurityKeywords()
@@ -180,62 +225,64 @@ func CheckSecurityText(fullText string, messages []dto.Message) *SecurityCheckRe
 		return nil
 	}
 
-	// 始终提取最后一条 user 消息，既用于 user_only 匹配，也用于审计日志摘要
-	lastUserText := ExtractLastUserText(messages)
-
-	hasAll := false
-	for _, kw := range keywords {
-		if kw.CheckScope == "all" {
-			hasAll = true
-			break
+	// 预计算各 scope 对应的文本，避免对每条关键词重复提取
+	// scopeTextCache: checkScope → (lowerText, lastUserText)
+	type scopeText struct {
+		text     string // 小写，用于 AC 匹配
+		raw      string // 原始大小写，用于正则匹配
+		lastUser string // 最后一条 user 消息，用于审计日志摘要
+	}
+	scopeCache := make(map[string]*scopeText, 3)
+	getScope := func(scope string) *scopeText {
+		if v, ok := scopeCache[scope]; ok {
+			return v
 		}
+		raw, last := ExtractTextByScope(messages, scope)
+		v := &scopeText{text: strings.ToLower(raw), raw: raw, lastUser: last}
+		scopeCache[scope] = v
+		return v
 	}
 
-	// 按 check_scope 分组匹配
-	lowerFull := strings.ToLower(fullText)
-	var lowerUser string
-	if lastUserText != "" {
-		lowerUser = strings.ToLower(lastUserText)
+	// 收集 exact 关键词，按 scope 分组，每组用 Aho-Corasick 批量匹配
+	type exactGroup struct {
+		words    []string
+		kwMap    map[string]*model.SecurityKeyword
+		scope    string
 	}
-
-	// exact 关键词分两组，用 Aho-Corasick 批量匹配
-	var exactAll, exactUser []string
-	exactMapAll := make(map[string]*model.SecurityKeyword)
-	exactMapUser := make(map[string]*model.SecurityKeyword)
+	groupMap := make(map[string]*exactGroup)
 	for i := range keywords {
 		kw := &keywords[i]
 		if kw.MatchType == "regex" {
 			continue
 		}
+		scope := kw.CheckScope
+		if scope == "" {
+			scope = "user_only"
+		}
+		g, ok := groupMap[scope]
+		if !ok {
+			g = &exactGroup{scope: scope, kwMap: make(map[string]*model.SecurityKeyword)}
+			groupMap[scope] = g
+		}
 		lower := strings.ToLower(kw.Keyword)
-		if kw.CheckScope == "all" {
-			exactAll = append(exactAll, lower)
-			exactMapAll[lower] = kw
-		} else {
-			exactUser = append(exactUser, lower)
-			exactMapUser[lower] = kw
-		}
+		g.words = append(g.words, lower)
+		g.kwMap[lower] = kw
 	}
 
-	// 优先匹配 user_only 组（性能更优，覆盖大多数场景）
-	if len(exactUser) > 0 && lowerUser != "" {
-		if hit, matched := AcSearch(lowerUser, exactUser, true); hit && len(matched) > 0 {
-			if kw, ok := exactMapUser[strings.ToLower(matched[0])]; ok {
-				return &SecurityCheckResult{Hit: true, Keyword: *kw, Matched: matched[0], UserMessage: lastUserText}
+	// 按 scope 批量匹配 exact 关键词（性能最优，优先处理）
+	for _, g := range groupMap {
+		st := getScope(g.scope)
+		if len(g.words) == 0 || st.text == "" {
+			continue
+		}
+		if hit, matched := AcSearch(st.text, g.words, true); hit && len(matched) > 0 {
+			if kw, ok := g.kwMap[strings.ToLower(matched[0])]; ok {
+				return &SecurityCheckResult{Hit: true, Keyword: *kw, Matched: matched[0], UserMessage: st.lastUser}
 			}
 		}
 	}
 
-	// 再匹配 all 组
-	if len(exactAll) > 0 && hasAll {
-		if hit, matched := AcSearch(lowerFull, exactAll, true); hit && len(matched) > 0 {
-			if kw, ok := exactMapAll[strings.ToLower(matched[0])]; ok {
-				return &SecurityCheckResult{Hit: true, Keyword: *kw, Matched: matched[0], UserMessage: lastUserText}
-			}
-		}
-	}
-
-	// regex 关键词逐条匹配（使用缓存的已编译正则，避免重复编译）
+	// 逐条匹配 regex 关键词（使用缓存的已编译正则，避免重复编译）
 	for i := range keywords {
 		kw := &keywords[i]
 		if kw.MatchType != "regex" {
@@ -245,17 +292,16 @@ func CheckSecurityText(fullText string, messages []dto.Message) *SecurityCheckRe
 		if re == nil {
 			continue
 		}
-		var checkText string
-		if kw.CheckScope == "all" {
-			checkText = fullText
-		} else {
-			checkText = lastUserText
+		scope := kw.CheckScope
+		if scope == "" {
+			scope = "user_only"
 		}
-		if checkText == "" {
+		st := getScope(scope)
+		if st.raw == "" {
 			continue
 		}
-		if loc := re.FindString(checkText); loc != "" {
-			return &SecurityCheckResult{Hit: true, Keyword: *kw, Matched: loc, UserMessage: lastUserText}
+		if loc := re.FindString(st.raw); loc != "" {
+			return &SecurityCheckResult{Hit: true, Keyword: *kw, Matched: loc, UserMessage: st.lastUser}
 		}
 	}
 

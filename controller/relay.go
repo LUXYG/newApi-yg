@@ -142,7 +142,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				c.GetInt("id"), c.GetString("username"), words,
 				relayInfo.OriginModelName, c.ClientIP(),
 			)
-			newAPIError = types.NewError(err, types.ErrorCodeSensitiveWordsDetected)
+			// 修复：原 types.NewError(err, ...) 中 err 为 nil 会返回 HTTP 500，改为明确的 400
+			newAPIError = types.NewErrorWithStatusCode(
+				fmt.Errorf("[内容过滤] 本次请求包含屏蔽词，已被拦截。请修改输入内容后重试。"),
+				types.ErrorCodeSensitiveWordsDetected,
+				http.StatusBadRequest,
+			)
 			return
 		}
 	}
@@ -165,13 +170,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			if result.Keyword.Action == "ban_user" {
 				go service.BanUserForSecurity(userId, username)
 				newAPIError = types.NewErrorWithStatusCode(
-					fmt.Errorf("dangerous content detected, user has been disabled"),
+					fmt.Errorf("[安全拦截] 您的请求包含违禁内容，账号已被系统临时停用。请联系管理员申请解封，并说明使用场景。"),
 					types.ErrorCodeSensitiveWordsDetected,
 					http.StatusForbidden,
 				)
 			} else {
 				newAPIError = types.NewErrorWithStatusCode(
-					fmt.Errorf("request blocked: dangerous keyword detected"),
+					fmt.Errorf("[安全拦截] 本次请求已被拦截。请检查输入是否包含敏感信息（如手机号、身份证、内部密钥、数据库连接串等），删除相关内容后重试。"),
 					types.ErrorCodeSensitiveWordsDetected,
 					http.StatusBadRequest,
 				)

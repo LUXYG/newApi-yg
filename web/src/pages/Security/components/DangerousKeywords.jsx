@@ -49,8 +49,9 @@ const matchTypeLabelMap = {
 };
 
 const checkScopeLabelMap = {
-  user_only: '仅用户消息',
-  all: '全量消息',
+  user_only:     '用户消息',
+  user_and_tool: '用户+工具',
+  all:           '全量消息',
 };
 
 const DangerousKeywords = () => {
@@ -176,7 +177,7 @@ const DangerousKeywords = () => {
       dataIndex: 'check_scope',
       width: 120,
       render: (val) => (
-        <Tag size='small' color={val === 'all' ? 'orange' : 'green'}>
+        <Tag size='small' color={val === 'all' ? 'orange' : val === 'user_and_tool' ? 'blue' : 'green'}>
           {checkScopeLabelMap[val] || val}
         </Tag>
       ),
@@ -385,8 +386,9 @@ const DangerousKeywords = () => {
             field='check_scope'
             label={t('检查范围')}
             optionList={[
-              { label: t('仅用户消息（推荐）'), value: 'user_only' },
-              { label: t('全量消息（高性能开销）'), value: 'all' },
+              { label: t('仅用户消息（推荐·含历史轮次）'), value: 'user_only' },
+              { label: t('用户消息+工具读取内容（防文档泄露）'), value: 'user_and_tool' },
+              { label: t('全量消息（最严格·性能开销最大）'), value: 'all' },
             ]}
           />
           <Form.RadioGroup field='severity' label={t('危险等级')}>
