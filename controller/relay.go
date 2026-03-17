@@ -134,7 +134,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		meta = fastTokenCountMetaForPricing(request)
 	}
 
-	if needSensitiveCheck && meta != nil {
+	// 管理员及以上权限用户跳过全部安全过滤（白名单）
+	// role 由 model.UserBase.WriteContext 写入，复用现有 Redis 用户缓存，无额外 DB 查询
+	isPrivilegedUser := c.GetInt("role") >= common.RoleAdminUser
+
+	if needSensitiveCheck && meta != nil && !isPrivilegedUser {
 		contains, words := service.CheckSensitiveText(meta.CombineText)
 		if contains {
 			logger.LogWarn(c, fmt.Sprintf("user sensitive words detected: %s", strings.Join(words, ", ")))
@@ -153,7 +157,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	// 危险关键词检测（独立于敏感词，支持禁用用户）
-	if r, ok := request.(*dto.GeneralOpenAIRequest); ok && len(r.Messages) > 0 {
+	if r, ok := request.(*dto.GeneralOpenAIRequest); ok && len(r.Messages) > 0 && !isPrivilegedUser {
 		combineText := ""
 		if meta != nil {
 			combineText = meta.CombineText
