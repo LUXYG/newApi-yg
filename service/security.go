@@ -192,26 +192,19 @@ func HandleSensitiveWordHit(userId int, username string, words []string, modelNa
 }
 
 // BanUserForSecurity 因安全关键词命中而禁用用户。
-// 采用双保险策略：同时禁用用户账号和该用户所有 Token，并清除 Redis 用户缓存。
-// 即使 Token Redis 缓存在 TTL 内仍有效，DB 层 TokenStatusDisabled 也会在缓存过期后提供兜底。
+// 只禁用 User 账号 + 清除 Redis 缓存，不操作 Token。
+// Token 的可用性由 middleware/auth.go TokenAuth 中的 GetUserCache → Status 检查保障：
+// 用户被禁用后，所有使用该用户 Token 的请求都会被中间件拒绝（"用户已被封禁"），
+// 即使用户通过 Web 页面重新启用了 Token 也无法绕过。
 func BanUserForSecurity(userId int, username string) {
-	// 1. 禁用用户账号
 	if err := model.DB.Model(&model.User{}).Where("id = ?", userId).Update("status", common.UserStatusDisabled).Error; err != nil {
 		common.SysError("Security: failed to ban user " + username + ": " + err.Error())
 		return
 	}
 
-	// 2. 批量禁用该用户所有启用中的 Token（双保险）
-	// ValidateUserToken 会检查 Token.Status，TokenStatusDisabled 会立即被拒绝
-	if err := model.DB.Model(&model.Token{}).
-		Where("user_id = ? AND status = ?", userId, common.TokenStatusEnabled).
-		Update("status", common.TokenStatusDisabled).Error; err != nil {
-		common.SysError("Security: failed to disable tokens for user " + username + ": " + err.Error())
-	}
-
 	common.SysLog(fmt.Sprintf("Security: user banned, userId=%d, username=%s", userId, username))
 
-	// 3. 清除 Redis 用户缓存（key 格式与 model/user_cache.go 保持一致）
+	// 清除 Redis 用户缓存，确保下次请求立即从 DB 读取到 disabled 状态
 	_ = common.RedisDel(fmt.Sprintf("user:%d", userId))
 }
 

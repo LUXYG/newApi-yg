@@ -130,6 +130,19 @@ const DangerousKeywords = () => {
   };
 
   const handleSubmit = async (values) => {
+    // 正则类型关键词提交前做语法校验
+    if (values.match_type === 'regex') {
+      try {
+        new RegExp(values.keyword);
+      } catch (e) {
+        Toast.error(t('正则表达式语法错误：') + e.message);
+        return;
+      }
+      if (values.keyword.includes('\\|')) {
+        Toast.warning(t('提示："或"运算符直接使用 | 即可，不需要写 \\|（\\| 表示匹配字面量管道符）'));
+        return;
+      }
+    }
     setSubmitting(true);
     try {
       let res;
@@ -371,10 +384,21 @@ const DangerousKeywords = () => {
           labelPosition='left'
           labelWidth={100}
         >
+          {({ formState }) => (
+            <>
           <Form.TextArea
             field='keyword'
             label={t('关键词')}
-            placeholder={t('输入关键词')}
+            placeholder={
+              formState.values.match_type === 'regex'
+                ? t('输入正则表达式，例如：1[3-9]\\d{9}（手机号）')
+                : t('输入关键词')
+            }
+            extraText={
+              formState.values.match_type === 'regex'
+                ? t('正则语法提示："或"用 | 不用 \\|；\\d 匹配数字；{n} 匹配n次。例：(19|20)\\d{2} 匹配 1900-2099 的年份')
+                : ''
+            }
             rules={[{ required: true, message: t('关键词不能为空') }]}
             autosize={{ minRows: 2, maxRows: 6 }}
           />
@@ -427,6 +451,8 @@ const DangerousKeywords = () => {
               </Button>
             </Space>
           </div>
+            </>
+          )}
         </Form>
       </Modal>
     </div>
