@@ -16,7 +16,7 @@ import {
 import {
   IllustrationNoResult,
 } from '@douyinfe/semi-illustrations';
-import { Plus, Search } from 'lucide-react';
+import { Plus, Search, Upload } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { API } from '../../../helpers/api';
 import CardTable from '../../../components/common/ui/CardTable';
@@ -67,6 +67,9 @@ const DangerousKeywords = () => {
   const [modalVisible, setModalVisible] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [importVisible, setImportVisible] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [importSubmitting, setImportSubmitting] = useState(false);
 
   const fetchKeywords = useCallback(async () => {
     setLoading(true);
@@ -97,6 +100,10 @@ const DangerousKeywords = () => {
   const handleCreate = () => {
     setEditingItem(null);
     setModalVisible(true);
+  };
+
+  const handleOpenImport = () => {
+    setImportVisible(true);
   };
 
   const handleEdit = (record) => {
@@ -162,6 +169,69 @@ const DangerousKeywords = () => {
       Toast.error(t('操作失败'));
     }
     setSubmitting(false);
+  };
+
+  /**
+   * handleImportKeywords 支持两种 JSON 格式：
+   * 1. 直接数组: [{...}, {...}]
+   * 2. 包装对象: { "items": [{...}, {...}] }
+   */
+  const handleImportKeywords = async () => {
+    let parsed;
+    try {
+      parsed = JSON.parse(importText);
+    } catch (e) {
+      Toast.error(t('JSON 解析失败：') + e.message);
+      return;
+    }
+    setImportSubmitting(true);
+    try {
+      const res = await API.post('/api/security/keywords/import', parsed);
+      if (!res.data?.success) {
+        Toast.error(res.data?.message || t('导入失败'));
+        return;
+      }
+      const payload = res.data.data || {};
+      const created = payload.created || 0;
+      const updated = payload.updated || 0;
+      const failed = payload.failed || 0;
+      const errors = payload.errors || [];
+
+      if (failed > 0 && created + updated === 0) {
+        Toast.error(
+          errors[0] || t('导入失败，请检查 JSON 内容和字段合法性'),
+        );
+        return;
+      }
+
+      if (failed > 0) {
+        Toast.warning(
+          t('导入完成：新增 {{created}} 条，更新 {{updated}} 条，失败 {{failed}} 条', {
+            created,
+            updated,
+            failed,
+          }),
+        );
+      } else {
+        Toast.success(
+          t('导入成功：新增 {{created}} 条，更新 {{updated}} 条', {
+            created,
+            updated,
+          }),
+        );
+      }
+
+      setImportVisible(false);
+      setImportText('');
+      if (page !== 1) {
+        setPage(1);
+      } else {
+        fetchKeywords();
+      }
+    } catch {
+      Toast.error(t('导入失败'));
+    }
+    setImportSubmitting(false);
   };
 
   const columns = [
@@ -321,14 +391,24 @@ const DangerousKeywords = () => {
             ]}
           />
         </Space>
-        <Button
-          icon={<Plus size={14} />}
-          theme='solid'
-          type='primary'
-          onClick={handleCreate}
-        >
-          {t('新建关键词')}
-        </Button>
+        <Space>
+          <Button
+            icon={<Upload size={14} />}
+            theme='light'
+            type='primary'
+            onClick={handleOpenImport}
+          >
+            {t('批量导入关键词')}
+          </Button>
+          <Button
+            icon={<Plus size={14} />}
+            theme='solid'
+            type='primary'
+            onClick={handleCreate}
+          >
+            {t('新建关键词')}
+          </Button>
+        </Space>
       </div>
 
       <Spin spinning={loading}>
@@ -454,6 +534,40 @@ const DangerousKeywords = () => {
             </>
           )}
         </Form>
+      </Modal>
+
+      <Modal
+        title={t('批量导入关键词')}
+        visible={importVisible}
+        onCancel={() => setImportVisible(false)}
+        footer={null}
+        width={680}
+      >
+        <div style={{ marginBottom: 12, color: 'var(--semi-color-text-2)' }}>
+          {t('支持直接粘贴 JSON 数组，或使用 { items: [...] } 包装对象。导入按 keyword 做 upsert：存在则更新，不存在则创建。')}
+        </div>
+        <Input.TextArea
+          value={importText}
+          onChange={setImportText}
+          autosize={{ minRows: 16, maxRows: 24 }}
+          style={{ fontFamily: 'JetBrains Mono, Consolas' }}
+          placeholder={`[\n  {\n    "keyword": "保密协议",\n    "match_type": "exact",\n    "check_scope": "user_and_tool",\n    "action": "ban_user",\n    "severity": "high",\n    "notify_admin": true,\n    "enabled": true,\n    "description": "示例规则"\n  }\n]`}
+        />
+        <div style={{ textAlign: 'right', marginTop: 16 }}>
+          <Space>
+            <Button onClick={() => setImportVisible(false)}>
+              {t('取消')}
+            </Button>
+            <Button
+              theme='solid'
+              type='primary'
+              loading={importSubmitting}
+              onClick={handleImportKeywords}
+            >
+              {t('开始导入')}
+            </Button>
+          </Space>
+        </div>
       </Modal>
     </div>
   );

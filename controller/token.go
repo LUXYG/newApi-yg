@@ -14,6 +14,22 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// ensureUserCanManageTokens 直接从 DB 读取当前用户最新状态，避免 session/status 缓存旧值。
+// 被封禁用户不能新增令牌，也不能重新启用已禁用令牌。
+func ensureUserCanManageTokens(c *gin.Context, deniedMessage string) bool {
+	userId := c.GetInt("id")
+	user, err := model.GetUserById(userId, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return false
+	}
+	if user.Status != common.UserStatusEnabled {
+		common.ApiErrorMsg(c, deniedMessage)
+		return false
+	}
+	return true
+}
+
 func GetAllTokens(c *gin.Context) {
 	userId := c.GetInt("id")
 	pageInfo := common.GetPageQuery(c)
@@ -138,6 +154,9 @@ func GetTokenUsage(c *gin.Context) {
 }
 
 func AddToken(c *gin.Context) {
+	if !ensureUserCanManageTokens(c, "用户已被封禁，无法添加令牌") {
+		return
+	}
 	token := model.Token{}
 	err := c.ShouldBindJSON(&token)
 	if err != nil {
@@ -230,6 +249,11 @@ func UpdateToken(c *gin.Context) {
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	if statusOnly != "" && token.Status == common.TokenStatusEnabled {
+		if !ensureUserCanManageTokens(c, "用户已被封禁，无法启用令牌") {
+			return
+		}
 	}
 	if len(token.Name) > 50 {
 		common.ApiErrorI18n(c, i18n.MsgTokenNameTooLong)

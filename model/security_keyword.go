@@ -58,6 +58,16 @@ func GetSecurityKeywordById(id int) (*SecurityKeyword, error) {
 	return &kw, nil
 }
 
+// GetSecurityKeywordByKeyword 根据关键词文本查询单条记录。
+func GetSecurityKeywordByKeyword(keyword string) (*SecurityKeyword, error) {
+	var kw SecurityKeyword
+	err := DB.Where("keyword = ?", keyword).First(&kw).Error
+	if err != nil {
+		return nil, err
+	}
+	return &kw, nil
+}
+
 // CreateSecurityKeyword 创建危险关键词。
 func CreateSecurityKeyword(kw *SecurityKeyword) error {
 	return DB.Create(kw).Error

@@ -2,16 +2,76 @@ package controller
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
+
+type securityKeywordsImportRequest struct {
+	Items []model.SecurityKeyword `json:"items"`
+}
+
+// normalizeSecurityKeywordInput 统一填充默认值并校验危险关键词字段合法性。
+func normalizeSecurityKeywordInput(kw *model.SecurityKeyword) error {
+	kw.Keyword = strings.TrimSpace(kw.Keyword)
+	if kw.Keyword == "" {
+		return fmt.Errorf("关键词不能为空")
+	}
+	if kw.MatchType == "" {
+		kw.MatchType = "exact"
+	}
+	if kw.CheckScope == "" {
+		kw.CheckScope = "user_only"
+	}
+	if kw.Action == "" {
+		kw.Action = "ban_user"
+	}
+	if kw.Severity == "" {
+		kw.Severity = "high"
+	}
+
+	switch kw.MatchType {
+	case "exact", "regex":
+	default:
+		return fmt.Errorf("不支持的匹配类型: %s", kw.MatchType)
+	}
+	switch kw.CheckScope {
+	case "user_only", "user_and_tool", "all":
+	default:
+		return fmt.Errorf("不支持的检查范围: %s", kw.CheckScope)
+	}
+	switch kw.Action {
+	case "ban_user", "block_only":
+	default:
+		return fmt.Errorf("不支持的触发动作: %s", kw.Action)
+	}
+	switch kw.Severity {
+	case "high", "medium", "low":
+	default:
+		return fmt.Errorf("不支持的危险等级: %s", kw.Severity)
+	}
+
+	if kw.MatchType == "regex" {
+		if strings.Contains(kw.Keyword, `\|`) {
+			return fmt.Errorf(`正则中的“或”运算符直接使用 |，不要写 \|`)
+		}
+		if _, err := regexp.Compile(kw.Keyword); err != nil {
+			return fmt.Errorf("正则表达式语法错误: %v", err)
+		}
+	}
+	return nil
+}
 
 // --- 危险关键词 CRUD ---
 
@@ -48,21 +108,9 @@ func CreateSecurityKeyword(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数解析失败")
 		return
 	}
-	if kw.Keyword == "" {
-		common.ApiErrorMsg(c, "关键词不能为空")
+	if err := normalizeSecurityKeywordInput(&kw); err != nil {
+		common.ApiErrorMsg(c, err.Error())
 		return
-	}
-	if kw.MatchType == "" {
-		kw.MatchType = "exact"
-	}
-	if kw.CheckScope == "" {
-		kw.CheckScope = "user_only"
-	}
-	if kw.Action == "" {
-		kw.Action = "ban_user"
-	}
-	if kw.Severity == "" {
-		kw.Severity = "high"
 	}
 	kw.CreatedAt = time.Now()
 	kw.UpdatedAt = time.Now()
@@ -117,6 +165,10 @@ func UpdateSecurityKeyword(c *gin.Context) {
 	existing.Description = update.Description
 	existing.NotifyAdmin = update.NotifyAdmin
 	existing.Enabled = update.Enabled
+	if err := normalizeSecurityKeywordInput(existing); err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
 	existing.UpdatedAt = time.Now()
 
 	if err := model.UpdateSecurityKeyword(existing); err != nil {
@@ -147,6 +199,99 @@ func DeleteSecurityKeyword(c *gin.Context) {
 		common.SysLog(fmt.Sprintf("Security: deleted keyword id=%d", id))
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
+}
+
+// ImportSecurityKeywords 通过 JSON 数组或 {items:[...]} 批量导入危险关键词。
+// 若 keyword 已存在，则按 keyword 做更新（upsert）；否则创建新记录。
+func ImportSecurityKeywords(c *gin.Context) {
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		common.ApiErrorMsg(c, "读取请求体失败")
+		return
+	}
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed == "" {
+		common.ApiErrorMsg(c, "导入内容不能为空")
+		return
+	}
+
+	var items []model.SecurityKeyword
+	if strings.HasPrefix(trimmed, "[") {
+		if err := json.Unmarshal(body, &items); err != nil {
+			common.ApiErrorMsg(c, "JSON 数组解析失败")
+			return
+		}
+	} else {
+		var req securityKeywordsImportRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			common.ApiErrorMsg(c, "JSON 对象解析失败")
+			return
+		}
+		items = req.Items
+	}
+	if len(items) == 0 {
+		common.ApiErrorMsg(c, "未解析到任何关键词条目")
+		return
+	}
+
+	now := time.Now()
+	created := 0
+	updated := 0
+	failed := 0
+	errorsList := make([]string, 0)
+
+	for idx := range items {
+		item := items[idx]
+		if err := normalizeSecurityKeywordInput(&item); err != nil {
+			failed++
+			errorsList = append(errorsList, fmt.Sprintf("第 %d 条失败: %v", idx+1, err))
+			continue
+		}
+
+		existing, getErr := model.GetSecurityKeywordByKeyword(item.Keyword)
+		if getErr == nil {
+			existing.MatchType = item.MatchType
+			existing.CheckScope = item.CheckScope
+			existing.Action = item.Action
+			existing.Severity = item.Severity
+			existing.Description = item.Description
+			existing.NotifyAdmin = item.NotifyAdmin
+			existing.Enabled = item.Enabled
+			existing.UpdatedAt = now
+			if err := model.UpdateSecurityKeyword(existing); err != nil {
+				failed++
+				errorsList = append(errorsList, fmt.Sprintf("第 %d 条失败: %v", idx+1, err))
+				continue
+			}
+			updated++
+			continue
+		}
+		if !errors.Is(getErr, gorm.ErrRecordNotFound) {
+			failed++
+			errorsList = append(errorsList, fmt.Sprintf("第 %d 条失败: %v", idx+1, getErr))
+			continue
+		}
+
+		item.CreatedAt = now
+		item.UpdatedAt = now
+		if err := model.CreateSecurityKeyword(&item); err != nil {
+			failed++
+			errorsList = append(errorsList, fmt.Sprintf("第 %d 条失败: %v", idx+1, err))
+			continue
+		}
+		created++
+	}
+
+	service.InvalidateSecurityKeywordsCache()
+	if common.DebugEnabled {
+		common.SysLog(fmt.Sprintf("Security: imported keywords created=%d updated=%d failed=%d", created, updated, failed))
+	}
+	common.ApiSuccess(c, gin.H{
+		"created": created,
+		"updated": updated,
+		"failed":  failed,
+		"errors":  errorsList,
+	})
 }
 
 // ToggleSecurityKeyword 切换危险关键词的启用/禁用状态。

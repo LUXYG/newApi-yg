@@ -371,6 +371,7 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			securityRoute.GET("/keywords", controller.GetSecurityKeywords)
 			securityRoute.POST("/keywords", controller.CreateSecurityKeyword)
+			securityRoute.POST("/keywords/import", controller.ImportSecurityKeywords)
 			securityRoute.PUT("/keywords/:id", controller.UpdateSecurityKeyword)
 			securityRoute.DELETE("/keywords/:id", controller.DeleteSecurityKeyword)
 			securityRoute.POST("/keywords/:id/toggle", controller.ToggleSecurityKeyword)
